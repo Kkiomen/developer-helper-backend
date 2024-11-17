@@ -1,0 +1,248 @@
+---
+sidebar_position: 1
+---
+
+# Jak dodać produkt do koszyka
+
+## Dokumentacja: Dodawanie Produktów do Koszyka
+
+### Opis Funkcjonalności
+
+System umożliwia dodawanie produktów do koszyka za pomocą endpointu `api/ui/carts/{cartId}/add-product-to-cart`. Funkcjonalność ta została zaimplementowana w module Cart, w kontrolerze: `Wise/Cart/ApiUi/Controller/Carts/PostAddProductsToCartController.php`.
+
+Dodawanie produktu do koszyka obsługiwane jest przez serwis `AddProductToCartServiceInterface`, który implementuje różne strategie dodawania. Poniżej znajdują się szczegółowe opisy implementacji oraz możliwych trybów działania.
+
+### Implementacja: Dodawanie Produktu do Koszyka
+
+Poniższy kod przedstawia fragment implementacji dodawania produktu do koszyka.
+
+```php
+public function __construct(
+   private readonly Wise\Cart\Service\Cart\Interfaces\AddProductToCartServiceInterface $addProductToCartService,
+){}
+
+$params = new AddProductToCartParams();
+$params
+   ->setCartId($dto->getCartId())
+   ->setProductId($product->getProductId())
+   ->setQuantity($product->getQuantity())
+   ->setUnitId(!$product->isInitialized('unitId') || $product->getUnitId() == null ? null : $product?->getUnitId())
+   ->setWarehouseId(!$product->isInitialized('warehouseId') || $product->getWarehouseId() == null ? null : $product?->getWarehouseId());
+
+$result = ($this->addProductToCartService)($params);
+```
+
+**Opis Kodu:**
+- **Konstruktor**: Inicjalizuje serwis `AddProductToCartServiceInterface`, co pozwala na wstrzyknięcie zależności przez Dependency Injection.
+- **Tworzenie Parametrów**: Utworzony zostaje obiekt `AddProductToCartParams`, który przechowuje szczegóły dotyczące produktu, takie jak `cartId`, `productId`, `quantity`, `unitId`, i `warehouseId`.
+- **Wywołanie Serwisu**: Następnie, serwis `addProductToCartService` jest wywoływany z przekazanymi parametrami, co prowadzi do dodania produktu do koszyka.
+
+### Logika Dodawania Produktu do Koszyka (Serwis Aplikacji)
+
+Serwis `AddProductToCartService` implementuje szczegółową logikę dodawania produktu do koszyka, w tym:
+1. Wczytanie koszyka na podstawie identyfikatora `cartId`.
+2. Uruchomienie procesu dodawania produktu, weryfikację jego dostępności oraz dodanie do koszyka przy użyciu serwisu `AddProductQuantityToCartServiceInterface`.
+3. Walidację koszyka i zapis jego stanu.
+4. Obsługę zdarzeń systemowych.
+
+#### Kod źródłowy: AddProductToCartService
+
+```php
+namespace Wise\Cart\Service\Cart;
+
+use Doctrine\Common\Collections\ArrayCollection;
+use Wise\Cart\Domain\Cart\Cart;
+use Wise\Cart\Domain\Cart\Services\AddProductQuantityToCartConfiguration;
+use Wise\Cart\Domain\Cart\Services\AddProductQuantityToCartResult;
+use Wise\Cart\Domain\Cart\Services\Interfaces\GetAvailableQuantityForCartPositionServiceInterface;
+use Wise\Cart\Domain\CartPosition\CartPosition;
+use Wise\Cart\Domain\CartPosition\CartPositionAlreadyExistsException;
+use Wise\Security\Service\Interfaces\CurrentUserServiceInterface;
+
+class AddProductToCartService implements AddProductToCartServiceInterface {
+   public function __construct(
+       private readonly CartRepositoryInterface $cartRepository,
+       private readonly AddProductQuantityToCartServiceInterface $addProductQuantityToCartService,
+       private readonly ValidatorServiceInterface $validatorService,
+       private readonly DomainEventsDispatcher $eventsDispatcher,
+       private readonly ConfigServiceInterface $configService,
+       private readonly NotificationManagerInterface $notificationManager,
+       private readonly TranslatorInterface $translator
+   ){}
+
+   public function __invoke(AddProductToCartParams $params): AddProductToCartResult {
+       // Wczytanie koszyka
+       $cart = $this->getCart($params->getCartId());
+
+       // Dodawanie produktu do koszyka
+       $addedProductResult = ($this->addProductQuantityToCartService)(
+           cart: $cart,
+           productId: $params->getProductId(),
+           quantity: $params->getQuantity(),
+           unitId: $params->getUnitId(),
+           configuration: $this->getConfiguration($params),
+           warehouseId: $params->getWarehouseId()
+       );
+
+       $this->verifyToAddNotification($addedProductResult);
+       $cart->validate();
+       $this->dispatchEventsBeforeSave($cart);
+       $this->validateDataBeforeSave($cart);
+       $cart = $this->saveEntity($cart);
+       $this->dispatchEventsAfterSave($cart);
+
+       $result = new AddProductToCartResult();
+       $result->setCartId($cart->getId())->setCartPositions($addedProductResult->getCartPositions());
+       return $result;
+   }
+}
+```
+
+**Opis Kodu:**
+- **Wczytanie Koszyka**: Koszyk jest pobierany z repozytorium na podstawie identyfikatora `cartId`.
+- **Dodanie Produktu**: Produkt jest dodawany do koszyka, przy czym sprawdzana jest jego dostępność i jednostka miary. Wykorzystano serwis `addProductQuantityToCartService`.
+- **Walidacja i Zapis**: Koszyk jest walidowany, a dane zapisywane do bazy. Następnie wysyłane są odpowiednie zdarzenia systemowe.
+
+### Tryby Dodawania Produktów do Koszyka
+
+Obecnie dostępne są dwa tryby (strategie) dodawania produktów do koszyka:
+
+1. **ADDING_TO_SPECIFIC_WAREHOUSE**
+    - Strategia dodaje produkt do konkretnego magazynu. Jest to domyślny tryb.
+    -  Identyfikator magazynu jest pobierany z parametrów. Jeśli nie został przekazany, ustawiany jest domyślny magazyn, zdefiniowany w konfiguracji.
+    - Identyfikator magazynu można skonfigurować w pliku YAML za pomocą:
+      ```yaml
+      wise_cart:
+        add_product_quantity_to_cart:
+          default_warehouse_id: 3
+      ```
+      _Gdzie "3" to identyfikator magazynu._
+
+
+2. **DISTRIBUTION_IN_WAREHOUSES**
+    - Strategia rozdziela produkty między magazyny według ich priorytetów oraz dostępnej pojemności.
+    - Przykład konfiguracji YAML za pomocą:
+      ```yaml
+      wise_cart:
+        add_product_quantity_to_cart:
+          distribution_warehouses_priority_list: [11, 4, 3]
+      ```
+      _W nawiasie podajemy identyfikatory magazynów w kolejności priorytetów. W powyższym przykładzie, produkt zostanie dodany do magazynu o ID 11, jeśli nie ma już tam miejsca, to do magazynu o ID 4, a jeśli i tam nie ma miejsca, to do magazynu o ID 3.
+      Jeśli użytkownik będzie chciał podać większą liczbę produktów niż jest dostępnych w magazynach, to zostanie dodana maksymalna dostępna ilość produktów i otrzyma odpowiedni komunikat._
+
+### Implementacja Strategii Dodawania Produktów
+
+#### Strategia `ADDING_TO_SPECIFIC_WAREHOUSE`
+Strategia ta dodaje produkt do określonego magazynu. W przypadku braku dostępnego magazynu rzucany jest wyjątek.
+
+```php
+class AddProductToCartSpecificWarehouseStrategy implements AddProductToCartStrategyInterface {
+   public function __construct(
+       private readonly CartPositionFactory $cartPositionFactory,
+       private readonly GetAvailableQuantityForCartPositionServiceInterface $availableQuantityForCartPositionService,
+       private readonly CurrentUserServiceInterface $currentUserService
+   ) {}
+
+   public function addProductToCart(Cart $cart, int $productId, float $quantity, int $unitId, AddProductQuantityToCartConfiguration $configuration, ?int $warehouseId = null): AddProductQuantityToCartResult {
+       // Ustal magazyn
+       $warehouseId = $warehouseId ?? $configuration->getDefaultWarehouseId();
+       if ($warehouseId === null) {
+           throw (new CommonLogicException())->setTranslation('cart.add_product_quantity_to_cart.empty_warehouseId');
+       }
+
+       // Pobierz dostępność produktu
+       $availableStock = $this->getAvailableQuantityForCartPosition($productId, $unitId, $warehouseId, $quantity);
+       $this->availableQuantityForCartPositionService->verifyStockAvailability($availableStock, $quantity);
+
+       // Znajdź lub utwórz pozycję koszyka
+       $cartPosition = $cart->findPositionByProductIdUnitIdWarehouseId($productId, $unitId, $warehouseId);
+       if ($cartPosition !== null) {
+           $cartPosition->setQuantity($cartPosition->getQuantity() + $availableStock->getAvailableQuantity());
+       } else {
+           $cartPosition = $this->cartPositionFactory->createWithProductIdUnitId($cart, $productId, $unitId, $availableStock->getAvailableQuantity(), $warehouseId);
+           $this->addCartPositionToCart($cart, $cartPosition);
+       }
+
+       $result = new AddProductQuantityToCartResult();
+       $result->addCartPosition($cartPosition)->setAvailableStock($availableStock)->setCart($cart);
+       return $result;
+   }
+}
+```
+
+**Opis Kodu Krok po Kroku:**
+1. **Ustal Magazyn**: Jeśli magazyn nie został przekazany, ustawiany jest magazyn domyślny. Jeśli nie można ustalić magazynu, rzucany jest wyjątek `CommonLogicException`.
+2. **Pobierz Dostępność Produktu**: Za pomocą metody `getAvailableQuantityForCartPosition()` pobierana jest dostępna ilość produktu w magazynie.
+3. **Weryfikacja Dostępności**: Sprawdzana jest dostępność produktu w magazynie, aby upewnić się, że można dodać żądaną ilość.
+4. **Znajdź lub Utwórz Pozycję Koszyka**: Jeśli pozycja koszyka dla danego produktu już istnieje, ilość jest aktualizowana. Jeśli nie, tworzona jest nowa pozycja koszyka.
+5. **Przygotowanie Wyniku**: Zwracany jest obiekt `AddProductQuantityToCartResult`, który zawiera informacje o dodanych pozycjach koszyka.
+
+#### Strategia `DISTRIBUTION_IN_WAREHOUSES`
+Strategia ta rozdziela produkt między magazyny według ich priorytetów.
+
+```php
+class AddProductToCartDistributedWarehousesStrategy implements AddProductToCartStrategyInterface {
+   public function __construct(
+       private readonly CartPositionFactory $cartPositionFactory,
+       private readonly GetAvailableQuantityForCartPositionServiceInterface $availableQuantityForCartPositionService,
+       private readonly CurrentUserServiceInterface $currentUserService
+   ) {}
+
+   public function addProductToCart(Cart $cart, int $productId, float $quantity, int $unitId, AddProductQuantityToCartConfiguration $configuration, ?int $warehouseId = null): AddProductQuantityToCartResult {
+       $result = new AddProductQuantityToCartResult();
+       $listOfWarehouses = $configuration->getDistributionWarehousesPriorityList();
+       $remainingQuantity = $quantity;
+
+       $warehousesQuantity = $this->getAvailableQuantitiesByWarehouses($productId, $unitId, $listOfWarehouses);
+
+       foreach ($warehousesQuantity as $availableStock) {
+           $warehouseId = $availableStock->getWarehouseId();
+           if ($warehouseId === null || !in_array($warehouseId, $listOfWarehouses)) {
+               continue;
+           }
+
+           $quantityToAdd = min($remainingQuantity, $availableStock->getAvailableQuantity());
+           if ($quantityToAdd <= 0) {
+               continue;
+           }
+
+           $cartPosition = $cart->findPositionByProductIdUnitIdWarehouseId($productId, $unitId, $warehouseId);
+           if ($cartPosition !== null) {
+               $cartPosition->setQuantity($cartPosition->getQuantity() + $quantityToAdd);
+           } else {
+               $cartPosition = $this->cartPositionFactory->createWithProductIdUnitId($cart, $productId, $unitId, $quantityToAdd, $warehouseId);
+               $this->addCartPositionToCart($cart, $cartPosition);
+           }
+
+           $result->addCartPosition($cartPosition);
+           $remainingQuantity -= $quantityToAdd;
+           if ($remainingQuantity <= 0) {
+               break;
+           }
+       }
+
+       if ($remainingQuantity > 0) {
+           throw new CartPositionOverStockException();
+       }
+
+       $cart->emitRecalculateEvent();
+       $result->setCart($cart);
+       return $result;
+   }
+}
+```
+
+**Opis Kodu Krok po Kroku:**
+1. **Inicjalizacja Wyniku**: Tworzony jest obiekt `AddProductQuantityToCartResult`.
+2. **Pobranie Listy Magazynów**: Z konfiguracji pobierana jest lista magazynów według priorytetów.
+3. **Pobranie Dostępności w Magazynach**: Dla każdego magazynu w kolejności priorytetowej pobierana jest dostępność produktu.
+4. **Iteracja po Magazynach**: Dla każdego magazynu sprawdzana jest dostępność produktu. Jeśli magazyn jest dostępny i ilość do dodania jest większa niż 0, produkt jest dodawany do magazynu.
+5. **Tworzenie lub Aktualizacja Pozycji Koszyka**: Jeśli pozycja koszyka dla danego produktu już istnieje, jej ilość jest aktualizowana. Jeśli nie, tworzona jest nowa pozycja koszyka.
+6. **Zmniejszenie Pozostałej Ilości**: Pozostała ilość produktu jest zmniejszana o ilość dodaną do bieżącego magazynu. Proces jest kontynuowany do momentu, aż cała ilość zostanie dodana.
+7. **Obsługa Braku Miejsca**: Jeśli po iteracji po wszystkich magazynach pozostała ilość jest większa od 0, rzucany jest wyjątek `CartPositionOverStockException`.
+8. **Emisja Zdarzenia**: Po zakończeniu procesu dodawania emitowane jest zdarzenie przeliczenia koszyka (`emitRecalculateEvent`).
+9. **Zwrócenie Wyniku**: Na końcu zwracany jest obiekt `AddProductQuantityToCartResult`, który zawiera informacje o dodanych pozycjach koszyka.
+
+### Podsumowanie
+
+W tej dokumentacji przedstawiono szczegółowy opis implementacji dodawania produktów do koszyka w systemie. Omówiono różne tryby dodawania produktów: dodawanie do konkretnego magazynu (`ADDING_TO_SPECIFIC_WAREHOUSE`) oraz rozdzielanie produktów między magazyny według priorytetów (`DISTRIBUTION_IN_WAREHOUSES`). Każda ze strategii została szczegółowo opisana, w tym ich logika oraz kroki wykonywane podczas dodawania produktów do koszyka. Dokumentacja zawiera również przykłady kodu, które ilustrują działanie poszczególnych strategii, co ułatwia zrozumienie ich funkcjonowania i implementacji.
