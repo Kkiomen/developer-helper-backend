@@ -26,7 +26,7 @@ class ResponseHelper
             $stream = $this->languageModel->generateStreamWithConversation(
                 userMessage: $responseDto->getUserMessage(),
                 systemPrompt: $responseDto->getSystemPrompt(),
-                settings: (new LanguageModelSettings())->setLanguageModelType(LanguageModelType::NORMAL)->setTemperature(1),
+                settings: (new LanguageModelSettings())->setLanguageModelType(LanguageModelType::INTELLIGENT)->setTemperature(1),
                 conversationMessages: $this->conversationService->getConversationMessagesByHash($responseDto->getConversationHash())
             );
 

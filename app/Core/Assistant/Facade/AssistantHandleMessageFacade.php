@@ -7,6 +7,7 @@ use App\Core\Assistant\Dto\ResponseAssistantToPrepareResultDto;
 use App\Core\Assistant\Enum\KnowledgeType;
 use App\Core\Assistant\Helper\KnowledgeHelper;
 use App\Core\Assistant\Helper\ResponseHelper;
+use App\Core\Assistant\Prompt\DefaultAssistantPrompt;
 use App\Core\LLM\OpenApi\OpenApiLLMService;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -29,7 +30,7 @@ class AssistantHandleMessageFacade
 
 
         // Dodanie system prompt
-        $this->assistantHandleMessageDto->setSystemPrompt('Jesteś senior PHP developerem, kobietą o imieniu Aria. Odpowiedź krótko na pytanie użytkownika. Jeśli masz dane o kodzie/konfiguracji to wyselekcjonuj je i podaj użytkownikowi. Do udzielenia odpowiedzi wykorzystaj baze wiedzy. Jeśli masz informacje w bazie wiedzy, nie wymyślaj. Nie halucynuj! ### Baza wiedzy z kodu: \n' . $knowledgeCode . ' \n\n ===== Baza wiedzy z dokumentacji ==== \n\n' . $knowledgeDocumentation);
+        $this->assistantHandleMessageDto->setSystemPrompt(DefaultAssistantPrompt::getPrompt() . ' Nie halucynuj! ### Baza wiedzy z kodu: \n' . $knowledgeCode . ' \n\n ===== Baza wiedzy z dokumentacji ==== \n\n' . $knowledgeDocumentation);
 
         // Przygotowanie dto na podstawie którego zostanie przygotowana odpowiedź
         $response = new ResponseAssistantToPrepareResultDto();
