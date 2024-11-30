@@ -14,7 +14,8 @@
         "livewire/livewire": "^3.0",
         "openai-php/client": "^0.10.2",
         "pusher/pusher-php-server": "^7.2",
-        "yethee/tiktoken": "^0.7.0"
+        "yethee/tiktoken": "^0.7.0",
+        "ext-zip": "*"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",

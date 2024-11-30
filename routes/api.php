@@ -5,6 +5,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Broadcast;
 use App\Http\Controllers\AssistantController;
+use App\Http\Controllers\FileUploadController;
 
 Route::get('/user', function (Request $request) {
     return $request->user();
@@ -19,6 +20,9 @@ Route::group(['prefix'=>'assistant', 'middleware' => ['auth:sanctum']], function
     Route::post('/send-message', [AssistantController::class, 'sendMessage']);
     Route::get('/session-hash', [AssistantController::class, 'getSessionHash']);
     Route::get('/messages/{conversationHash}', [AssistantController::class, 'getMessages']);
+
+
+    Route::post('/upload-files', [FileUploadController::class, 'uploadFiles']);
 });
 
 
